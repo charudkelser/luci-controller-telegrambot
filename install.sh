@@ -1,8 +1,7 @@
-:::writing{variant="document" id="58321" title="install.sh — Telegram Bot OpenWrt Installer v2"}
 #!/bin/sh
 
 # ======================================
-# Telegram Bot OpenWrt Installer v2
+# Telegram Bot OpenWrt Installer
 # ======================================
 
 REPO="https://raw.githubusercontent.com/charudkelser/luci-controller-telegrambot/main/files"
@@ -17,7 +16,7 @@ usr/lib/lua/luci/model/cbi/bot.lua:/usr/lib/lua/luci/model/cbi/bot.lua
 "
 
 # ======================================
-# BASIC
+# CHECK ROOT
 # ======================================
 
 if [ "$(id -u)" != "0" ]; then
@@ -27,18 +26,20 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
-rm -f "$TMP_BASE" "$TMP_BASE.update" "$TMP_BASE.check"
+# ======================================
+# CLEAN TEMP
+# ======================================
+
+rm -f "$TMP_BASE"
+rm -f "$TMP_BASE.update"
+rm -f "$TMP_BASE.check"
 
 # ======================================
-# TERMINAL INPUT
+# INPUT
 # ======================================
 
 read_input() {
-    if [ -r /dev/tty ]; then
-        read "$@" </dev/tty
-    else
-        read "$@"
-    fi
+    read "$@" </dev/tty
 }
 
 pause_menu() {
@@ -132,25 +133,6 @@ service_running() {
 }
 
 # ======================================
-# FILE STATUS
-# ======================================
-
-check_missing_files() {
-    MISSING=0
-
-    for ITEM in $FILES; do
-        SRC="${ITEM%%:*}"
-        DST="${ITEM#*:}"
-
-        if [ ! -f "$DST" ]; then
-            MISSING=1
-        fi
-    done
-
-    return "$MISSING"
-}
-
-# ======================================
 # CHECK UPDATE
 # ======================================
 
@@ -211,8 +193,19 @@ check_updates() {
         echo "[!] Pemeriksaan selesai dengan error."
     fi
 
-    if [ "$UPDATE_COUNT" = "0" ] && [ "$MISSING_COUNT" = "0" ] && [ "$CHECK_FAILED" = "0" ]; then
+    if [ "$UPDATE_COUNT" = "0" ] &&
+       [ "$MISSING_COUNT" = "0" ] &&
+       [ "$CHECK_FAILED" = "0" ]; then
+
         echo "[✓] Semua file sudah terbaru."
+
+    elif [ "$UPDATE_COUNT" -gt 0 ] ||
+         [ "$MISSING_COUNT" -gt 0 ]; then
+
+        echo "[i] Update tersedia."
+        echo "[i] File berubah : $UPDATE_COUNT"
+        echo "[i] File missing : $MISSING_COUNT"
+
     fi
 
     echo ""
@@ -414,10 +407,11 @@ do_update() {
     chmod +x /etc/init.d/bot 2>/dev/null
 
     # ==================================
-    # RESTART ONLY IF NEEDED
+    # RESTART
     # ==================================
 
-    if [ "$UPDATE_COUNT" -gt 0 ] && [ -x /etc/init.d/bot ]; then
+    if [ "$UPDATE_COUNT" -gt 0 ] &&
+       [ -x /etc/init.d/bot ]; then
 
         echo ""
         echo "[+] File berubah."
@@ -505,22 +499,22 @@ do_uninstall() {
     echo "======================================"
     echo ""
 
-    echo "File aplikasi yang akan dihapus:"
+    echo "[!] SEMUA file Telegram Bot akan dihapus:"
     echo ""
     echo "  /usr/bin/bot"
     echo "  /etc/init.d/bot"
     echo "  /usr/lib/lua/luci/controller/bot.lua"
     echo "  /usr/lib/lua/luci/model/cbi/bot.lua"
-    echo ""
-
-    echo "File konfigurasi/data TIDAK akan dihapus:"
-    echo ""
     echo "  /etc/config/bot"
     echo "  /etc/known_macs.txt"
     echo "  /etc/active_macs.txt"
     echo ""
 
-    printf "Lanjutkan? [y/N]: "
+    echo "[!] Token Telegram dan Chat ID juga akan terhapus."
+    echo "[!] Install ulang akan kembali ke konfigurasi kosong."
+    echo ""
+
+    printf "Lanjutkan copot pemasangan? [y/N]: "
     read_input ANSWER
 
     case "$ANSWER" in
@@ -535,11 +529,22 @@ do_uninstall() {
 
     echo ""
 
+    # ==================================
+    # STOP SERVICE
+    # ==================================
+
     if [ -x /etc/init.d/bot ]; then
+
         echo "[+] Stopping Telegram Bot..."
+
         /etc/init.d/bot stop >/dev/null 2>&1
         /etc/init.d/bot disable >/dev/null 2>&1
+
     fi
+
+    # ==================================
+    # REMOVE APPLICATION
+    # ==================================
 
     echo "[+] Menghapus file aplikasi..."
 
@@ -548,17 +553,31 @@ do_uninstall() {
     rm -f /usr/lib/lua/luci/controller/bot.lua
     rm -f /usr/lib/lua/luci/model/cbi/bot.lua
 
+    # ==================================
+    # REMOVE CONFIG
+    # ==================================
+
+    echo "[+] Menghapus konfigurasi..."
+
+    rm -f /etc/config/bot
+
+    # ==================================
+    # REMOVE DATA
+    # ==================================
+
+    echo "[+] Menghapus data Telegram Bot..."
+
+    rm -f /etc/known_macs.txt
+    rm -f /etc/active_macs.txt
+
     echo ""
     echo "======================================"
     echo " Telegram Bot berhasil dicopot!"
     echo "======================================"
     echo ""
-    echo "Config tetap aman:"
-    echo "  /etc/config/bot"
+    echo "Semua konfigurasi dan data telah dihapus."
     echo ""
-    echo "Data tetap aman:"
-    echo "  /etc/known_macs.txt"
-    echo "  /etc/active_macs.txt"
+    echo "Install ulang akan dimulai dari kondisi fresh."
     echo ""
 
     return 0
@@ -585,12 +604,14 @@ show_status() {
     MISSING=0
 
     for ITEM in $FILES; do
+
         SRC="${ITEM%%:*}"
         DST="${ITEM#*:}"
 
         if [ ! -f "$DST" ]; then
             MISSING=$((MISSING + 1))
         fi
+
     done
 
     if [ "$MISSING" = "0" ]; then
@@ -714,4 +735,3 @@ while true; do
     fi
 
 done
-:::
