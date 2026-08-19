@@ -1,6 +1,13 @@
+:::writing{variant="document" id="58321" title="install.sh — Telegram Bot OpenWrt Installer v2"}
 #!/bin/sh
 
+# ======================================
+# Telegram Bot OpenWrt Installer v2
+# ======================================
+
 REPO="https://raw.githubusercontent.com/charudkelser/luci-controller-telegrambot/main/files"
+
+TMP_BASE="/tmp/.telegrambot-installer"
 
 FILES="
 usr/bin/bot:/usr/bin/bot
@@ -9,25 +16,42 @@ usr/lib/lua/luci/controller/bot.lua:/usr/lib/lua/luci/controller/bot.lua
 usr/lib/lua/luci/model/cbi/bot.lua:/usr/lib/lua/luci/model/cbi/bot.lua
 "
 
-echo "======================================"
-echo " Telegram Bot OpenWrt Installer"
-echo "======================================"
-echo ""
-
 # ======================================
-# CHECK ROOT
+# BASIC
 # ======================================
 
 if [ "$(id -u)" != "0" ]; then
+    echo ""
     echo "[!] Installer harus dijalankan sebagai root."
+    echo ""
     exit 1
 fi
 
+rm -f "$TMP_BASE" "$TMP_BASE.update" "$TMP_BASE.check"
+
 # ======================================
-# DOWNLOAD TEMP FILE
+# TERMINAL INPUT
 # ======================================
 
-download_temp() {
+read_input() {
+    if [ -r /dev/tty ]; then
+        read "$@" </dev/tty
+    else
+        read "$@"
+    fi
+}
+
+pause_menu() {
+    echo ""
+    printf "Tekan Enter untuk kembali ke menu..."
+    read_input ENTER
+}
+
+# ======================================
+# DOWNLOAD
+# ======================================
+
+download_file() {
     SRC="$1"
     TMP="$2"
 
@@ -54,77 +78,162 @@ install_file() {
     SRC="$1"
     DST="$2"
 
-    TMP="/tmp/.telegrambot-install"
+    TMP="$TMP_BASE"
 
     echo "[+] Installing $DST"
 
-    if ! download_temp "$SRC" "$TMP"; then
-        echo "[!] Failed: $SRC"
+    if ! download_file "$SRC" "$TMP"; then
+        echo "[!] Gagal download: $SRC"
         return 1
     fi
 
     mkdir -p "$(dirname "$DST")"
 
-    mv "$TMP" "$DST"
-
-    return 0
-}
-
-# ======================================
-# UPDATE FILE
-# ======================================
-
-update_file() {
-    SRC="$1"
-    DST="$2"
-
-    TMP="/tmp/.telegrambot-update"
-
-    if [ ! -f "$DST" ]; then
-        echo "[+] Missing: $DST"
-        echo "    Installing..."
-        install_file "$SRC" "$DST"
-        return $?
-    fi
-
-    if ! download_temp "$SRC" "$TMP"; then
-        echo "[!] Failed checking: $SRC"
+    if ! mv "$TMP" "$DST"; then
+        rm -f "$TMP"
+        echo "[!] Gagal memasang: $DST"
         return 1
     fi
 
-    LOCAL_SUM="$(md5sum "$DST" 2>/dev/null | awk '{print $1}')"
-    REMOTE_SUM="$(md5sum "$TMP" 2>/dev/null | awk '{print $1}')"
+    return 0
+}
 
-    if [ "$LOCAL_SUM" = "$REMOTE_SUM" ]; then
-        echo "[=] Up to date: $DST"
-        rm -f "$TMP"
+# ======================================
+# DETECT INSTALLATION
+# ======================================
+
+is_installed() {
+    if [ -x /usr/bin/bot ] &&
+       [ -x /etc/init.d/bot ] &&
+       [ -f /usr/lib/lua/luci/controller/bot.lua ] &&
+       [ -f /usr/lib/lua/luci/model/cbi/bot.lua ]; then
         return 0
     fi
 
-    echo "[↑] Updating: $DST"
+    return 1
+}
 
-    mv "$TMP" "$DST"
+# ======================================
+# SERVICE STATUS
+# ======================================
+
+service_running() {
+    if [ -x /etc/init.d/bot ]; then
+        if /etc/init.d/bot status >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+
+    if pgrep -f '/usr/bin/bot' >/dev/null 2>&1; then
+        return 0
+    fi
+
+    return 1
+}
+
+# ======================================
+# FILE STATUS
+# ======================================
+
+check_missing_files() {
+    MISSING=0
+
+    for ITEM in $FILES; do
+        SRC="${ITEM%%:*}"
+        DST="${ITEM#*:}"
+
+        if [ ! -f "$DST" ]; then
+            MISSING=1
+        fi
+    done
+
+    return "$MISSING"
+}
+
+# ======================================
+# CHECK UPDATE
+# ======================================
+
+check_updates() {
+
+    UPDATE_COUNT=0
+    MISSING_COUNT=0
+    CHECK_FAILED=0
+
+    rm -f "$TMP_BASE.check"
+
+    echo ""
+    echo "======================================"
+    echo " Checking Telegram Bot"
+    echo "======================================"
+    echo ""
+
+    for ITEM in $FILES; do
+
+        SRC="${ITEM%%:*}"
+        DST="${ITEM#*:}"
+
+        TMP="$TMP_BASE.check"
+
+        if ! download_file "$SRC" "$TMP"; then
+            echo "[!] Gagal memeriksa: $DST"
+            CHECK_FAILED=1
+            rm -f "$TMP"
+            continue
+        fi
+
+        if [ ! -f "$DST" ]; then
+
+            echo "[+] MISSING : $DST"
+            MISSING_COUNT=$((MISSING_COUNT + 1))
+
+        else
+
+            LOCAL_SUM="$(md5sum "$DST" 2>/dev/null | awk '{print $1}')"
+            REMOTE_SUM="$(md5sum "$TMP" 2>/dev/null | awk '{print $1}')"
+
+            if [ "$LOCAL_SUM" = "$REMOTE_SUM" ]; then
+                echo "[=] TERBARU : $DST"
+            else
+                echo "[↑] UPDATE  : $DST"
+                UPDATE_COUNT=$((UPDATE_COUNT + 1))
+            fi
+
+        fi
+
+        rm -f "$TMP"
+
+    done
+
+    echo ""
+
+    if [ "$CHECK_FAILED" = "1" ]; then
+        echo "[!] Pemeriksaan selesai dengan error."
+    fi
+
+    if [ "$UPDATE_COUNT" = "0" ] && [ "$MISSING_COUNT" = "0" ] && [ "$CHECK_FAILED" = "0" ]; then
+        echo "[✓] Semua file sudah terbaru."
+    fi
+
+    echo ""
 
     return 0
 }
 
 # ======================================
-# INSTALL
+# INSTALL / REPAIR
 # ======================================
 
 do_install() {
 
     echo ""
     echo "======================================"
-    echo " Installing Telegram Bot"
+    echo " Telegram Bot OpenWrt"
+    echo " Install / Repair"
     echo "======================================"
     echo ""
 
     FAILED=0
-
-    OLD_IFS="$IFS"
-    IFS='
-'
 
     for ITEM in $FILES; do
 
@@ -132,7 +241,7 @@ do_install() {
         DST="${ITEM#*:}"
 
         if [ -f "$DST" ]; then
-            echo "[i] Already installed: $DST"
+            echo "[=] Sudah ada : $DST"
         else
             if ! install_file "$SRC" "$DST"; then
                 FAILED=1
@@ -141,38 +250,36 @@ do_install() {
 
     done
 
-    IFS="$OLD_IFS"
-
     # ==================================
     # CONFIG
     # ==================================
 
     if [ ! -f /etc/config/bot ]; then
 
-        echo "[+] Creating /etc/config/bot"
+        echo "[+] Membuat /etc/config/bot"
 
         if ! install_file "etc/config/bot" "/etc/config/bot"; then
+            echo "[!] Gagal membuat /etc/config/bot"
             FAILED=1
         fi
 
     else
 
-        echo "[i] /etc/config/bot already exists"
-        echo "    Keeping existing configuration"
+        echo "[=] Config tetap aman: /etc/config/bot"
 
     fi
 
     # ==================================
-    # DATA FILES
+    # DATA
     # ==================================
 
     if [ ! -f /etc/known_macs.txt ]; then
-        echo "[+] Creating /etc/known_macs.txt"
+        echo "[+] Membuat /etc/known_macs.txt"
         touch /etc/known_macs.txt
     fi
 
     if [ ! -f /etc/active_macs.txt ]; then
-        echo "[+] Creating /etc/active_macs.txt"
+        echo "[+] Membuat /etc/active_macs.txt"
         touch /etc/active_macs.txt
     fi
 
@@ -189,21 +296,23 @@ do_install() {
 
     if [ -x /etc/init.d/bot ]; then
 
-        /etc/init.d/bot enable
+        /etc/init.d/bot enable >/dev/null 2>&1
 
         echo ""
-        echo "[+] Starting Telegram Bot..."
+        echo "[+] Restarting Telegram Bot..."
 
-        /etc/init.d/bot restart
+        /etc/init.d/bot restart >/dev/null 2>&1
 
     fi
+
+    sleep 1
 
     echo ""
 
     if [ "$FAILED" = "1" ]; then
 
         echo "======================================"
-        echo " Instalasi selesai dengan error!"
+        echo " Install / Repair GAGAL"
         echo "======================================"
 
         return 1
@@ -211,10 +320,16 @@ do_install() {
     fi
 
     echo "======================================"
-    echo " Telegram Bot berhasil diinstall!"
+    echo " Install / Repair BERHASIL"
     echo "======================================"
     echo ""
-    echo "LuCI: Services -> Telegram Bot"
+
+    if service_running; then
+        echo "Service : RUNNING"
+    else
+        echo "Service : STOPPED"
+    fi
+
     echo ""
 
     return 0
@@ -228,28 +343,68 @@ do_update() {
 
     echo ""
     echo "======================================"
-    echo " Updating Telegram Bot"
+    echo " Telegram Bot OpenWrt"
+    echo " Update"
     echo "======================================"
     echo ""
 
+    UPDATE_COUNT=0
     FAILED=0
-
-    OLD_IFS="$IFS"
-    IFS='
-'
 
     for ITEM in $FILES; do
 
         SRC="${ITEM%%:*}"
         DST="${ITEM#*:}"
 
-        if ! update_file "$SRC" "$DST"; then
+        TMP="$TMP_BASE.update"
+
+        if ! download_file "$SRC" "$TMP"; then
+            echo "[!] Gagal memeriksa: $DST"
             FAILED=1
+            rm -f "$TMP"
+            continue
+        fi
+
+        if [ ! -f "$DST" ]; then
+
+            echo "[+] Missing: $DST"
+            echo "    Installing..."
+
+            mkdir -p "$(dirname "$DST")"
+
+            if mv "$TMP" "$DST"; then
+                UPDATE_COUNT=$((UPDATE_COUNT + 1))
+            else
+                echo "[!] Gagal memasang: $DST"
+                FAILED=1
+            fi
+
+            continue
+        fi
+
+        LOCAL_SUM="$(md5sum "$DST" 2>/dev/null | awk '{print $1}')"
+        REMOTE_SUM="$(md5sum "$TMP" 2>/dev/null | awk '{print $1}')"
+
+        if [ "$LOCAL_SUM" = "$REMOTE_SUM" ]; then
+
+            echo "[=] Terbaru: $DST"
+            rm -f "$TMP"
+
+        else
+
+            echo "[↑] Updating: $DST"
+
+            if mv "$TMP" "$DST"; then
+                UPDATE_COUNT=$((UPDATE_COUNT + 1))
+            else
+                echo "[!] Gagal update: $DST"
+                FAILED=1
+                rm -f "$TMP"
+            fi
+
         fi
 
     done
-
-    IFS="$OLD_IFS"
 
     # ==================================
     # PERMISSION
@@ -259,15 +414,18 @@ do_update() {
     chmod +x /etc/init.d/bot 2>/dev/null
 
     # ==================================
-    # SERVICE
+    # RESTART ONLY IF NEEDED
     # ==================================
 
-    if [ -x /etc/init.d/bot ]; then
+    if [ "$UPDATE_COUNT" -gt 0 ] && [ -x /etc/init.d/bot ]; then
 
         echo ""
+        echo "[+] File berubah."
         echo "[+] Restarting Telegram Bot..."
 
-        /etc/init.d/bot restart
+        /etc/init.d/bot restart >/dev/null 2>&1
+
+        sleep 1
 
     fi
 
@@ -276,16 +434,60 @@ do_update() {
     if [ "$FAILED" = "1" ]; then
 
         echo "======================================"
-        echo " Update selesai dengan error!"
+        echo " Update selesai dengan ERROR"
         echo "======================================"
+        echo ""
+        echo "File berubah: $UPDATE_COUNT"
 
         return 1
 
     fi
 
     echo "======================================"
-    echo " Telegram Bot berhasil diperbarui!"
+    echo " Update selesai"
     echo "======================================"
+    echo ""
+
+    if [ "$UPDATE_COUNT" = "0" ]; then
+        echo "Tidak ada file yang perlu diperbarui."
+    else
+        echo "File diperbarui: $UPDATE_COUNT"
+    fi
+
+    echo ""
+
+    return 0
+}
+
+# ======================================
+# RESTART
+# ======================================
+
+do_restart() {
+
+    echo ""
+    echo "======================================"
+    echo " Restart Telegram Bot"
+    echo "======================================"
+    echo ""
+
+    if [ ! -x /etc/init.d/bot ]; then
+        echo "[!] Telegram Bot belum terinstall."
+        return 1
+    fi
+
+    echo "[+] Restarting..."
+
+    /etc/init.d/bot restart >/dev/null 2>&1
+
+    sleep 1
+
+    if service_running; then
+        echo "[✓] Telegram Bot RUNNING."
+    else
+        echo "[!] Telegram Bot tidak berjalan."
+    fi
+
     echo ""
 
     return 0
@@ -303,23 +505,23 @@ do_uninstall() {
     echo "======================================"
     echo ""
 
-    echo "[!] File berikut akan dihapus:"
+    echo "File aplikasi yang akan dihapus:"
     echo ""
-    echo "/usr/bin/bot"
-    echo "/etc/init.d/bot"
-    echo "/usr/lib/lua/luci/controller/bot.lua"
-    echo "/usr/lib/lua/luci/model/cbi/bot.lua"
-    echo ""
-
-    echo "[i] File konfigurasi dan data TIDAK akan dihapus:"
-    echo ""
-    echo "/etc/config/bot"
-    echo "/etc/known_macs.txt"
-    echo "/etc/active_macs.txt"
+    echo "  /usr/bin/bot"
+    echo "  /etc/init.d/bot"
+    echo "  /usr/lib/lua/luci/controller/bot.lua"
+    echo "  /usr/lib/lua/luci/model/cbi/bot.lua"
     echo ""
 
-    printf "Lanjutkan copot pemasangan? [y/N]: "
-    read ANSWER </dev/tty
+    echo "File konfigurasi/data TIDAK akan dihapus:"
+    echo ""
+    echo "  /etc/config/bot"
+    echo "  /etc/known_macs.txt"
+    echo "  /etc/active_macs.txt"
+    echo ""
+
+    printf "Lanjutkan? [y/N]: "
+    read_input ANSWER
 
     case "$ANSWER" in
         y|Y|yes|YES)
@@ -335,11 +537,11 @@ do_uninstall() {
 
     if [ -x /etc/init.d/bot ]; then
         echo "[+] Stopping Telegram Bot..."
-        /etc/init.d/bot stop 2>/dev/null
-        /etc/init.d/bot disable 2>/dev/null
+        /etc/init.d/bot stop >/dev/null 2>&1
+        /etc/init.d/bot disable >/dev/null 2>&1
     fi
 
-    echo "[+] Removing application files..."
+    echo "[+] Menghapus file aplikasi..."
 
     rm -f /usr/bin/bot
     rm -f /etc/init.d/bot
@@ -351,97 +553,165 @@ do_uninstall() {
     echo " Telegram Bot berhasil dicopot!"
     echo "======================================"
     echo ""
-    echo "Konfigurasi tetap disimpan:"
-    echo "/etc/config/bot"
+    echo "Config tetap aman:"
+    echo "  /etc/config/bot"
     echo ""
-    echo "Data MAC tetap disimpan:"
-    echo "/etc/known_macs.txt"
-    echo "/etc/active_macs.txt"
+    echo "Data tetap aman:"
+    echo "  /etc/known_macs.txt"
+    echo "  /etc/active_macs.txt"
     echo ""
 
     return 0
 }
 
 # ======================================
-# MENU
+# STATUS
+# ======================================
+
+show_status() {
+
+    if is_installed; then
+        STATUS="TERINSTALL"
+    else
+        STATUS="BELUM TERINSTALL"
+    fi
+
+    if service_running; then
+        SERVICE="RUNNING"
+    else
+        SERVICE="STOPPED"
+    fi
+
+    MISSING=0
+
+    for ITEM in $FILES; do
+        SRC="${ITEM%%:*}"
+        DST="${ITEM#*:}"
+
+        if [ ! -f "$DST" ]; then
+            MISSING=$((MISSING + 1))
+        fi
+    done
+
+    if [ "$MISSING" = "0" ]; then
+        FILE_STATUS="OK"
+    else
+        FILE_STATUS="$MISSING MISSING"
+    fi
+
+    echo "Status      : $STATUS"
+    echo "Service     : $SERVICE"
+    echo "Application : $FILE_STATUS"
+}
+
+# ======================================
+# MAIN MENU
 # ======================================
 
 while true; do
 
-    INSTALLED=0
+    clear 2>/dev/null
 
-    if [ -x /usr/bin/bot ] && \
-       [ -x /etc/init.d/bot ] && \
-       [ -f /usr/lib/lua/luci/controller/bot.lua ] && \
-       [ -f /usr/lib/lua/luci/model/cbi/bot.lua ]; then
+    echo "======================================"
+    echo "       TELEGRAM BOT OPENWRT"
+    echo "======================================"
+    echo ""
 
-        INSTALLED=1
-
-    fi
+    show_status
 
     echo ""
     echo "======================================"
-    echo " Telegram Bot OpenWrt"
-    echo "======================================"
-
-    if [ "$INSTALLED" = "1" ]; then
-        echo " Status : TERINSTALL"
-    else
-        echo " Status : BELUM TERINSTALL"
-    fi
-
-    echo "======================================"
-    echo ""
-    echo "1. Install / Terinstall"
-    echo "2. Update"
-    echo "3. Copot Pemasangan"
-    echo "0. Cancel"
     echo ""
 
-    printf "Pilih [0-3]: "
-    read MENU </dev/tty
+    if is_installed; then
 
-    case "$MENU" in
+        echo "1. Install / Repair"
+        echo "2. Check Update"
+        echo "3. Update"
+        echo "4. Restart Service"
+        echo "5. Copot Pemasangan"
+        echo "0. Cancel"
 
-        1)
-            do_install
-            ;;
+        echo ""
 
-        2)
-            if [ "$INSTALLED" = "1" ]; then
+        printf "Pilih [0-5]: "
+        read_input MENU
+
+        case "$MENU" in
+
+            1)
+                do_install
+                pause_menu
+                ;;
+
+            2)
+                check_updates
+                pause_menu
+                ;;
+
+            3)
                 do_update
-            else
-                echo ""
-                echo "[!] Telegram Bot belum terinstall."
-                echo "[i] Gunakan menu 1 terlebih dahulu."
-            fi
-            ;;
+                pause_menu
+                ;;
 
-        3)
-            if [ "$INSTALLED" = "1" ]; then
+            4)
+                do_restart
+                pause_menu
+                ;;
+
+            5)
                 do_uninstall
-            else
+                pause_menu
+                ;;
+
+            0)
                 echo ""
-                echo "[i] Telegram Bot belum terinstall."
-            fi
-            ;;
+                echo "Batal. Tidak ada perubahan."
+                echo ""
+                exit 0
+                ;;
 
-        0)
-            echo ""
-            echo "Batal. Tidak ada perubahan."
-            echo ""
-            exit 0
-            ;;
+            *)
+                echo ""
+                echo "[!] Pilihan tidak valid."
+                sleep 1
+                ;;
 
-        *)
-            echo ""
-            echo "[!] Pilihan tidak valid."
-            ;;
+        esac
 
-    esac
+    else
 
-    echo ""
-    printf "Tekan Enter untuk kembali ke menu..."
-    read ENTER </dev/tty
+        echo "1. Install"
+        echo "0. Cancel"
+
+        echo ""
+
+        printf "Pilih [0-1]: "
+        read_input MENU
+
+        case "$MENU" in
+
+            1)
+                do_install
+                pause_menu
+                ;;
+
+            0)
+                echo ""
+                echo "Batal. Tidak ada perubahan."
+                echo ""
+                exit 0
+                ;;
+
+            *)
+                echo ""
+                echo "[!] Pilihan tidak valid."
+                sleep 1
+                ;;
+
+        esac
+
+    fi
 
 done
+:::
