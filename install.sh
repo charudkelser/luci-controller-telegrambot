@@ -411,3 +411,38 @@ while true; do
             if [ "$INSTALLED" = "1" ]; then
                 do_update
            
+              else
+                  echo ""
+                  echo "[!] Telegram Bot belum terinstall."
+                  echo "[i] Gunakan menu 1 terlebih dahulu."
+              fi
+              ;;
+
+          3)
+              if [ "$INSTALLED" = "1" ]; then
+                  do_uninstall
+              else
+                  echo ""
+                  echo "[i] Telegram Bot belum terinstall."
+              fi
+              ;;
+
+          0)
+              echo ""
+              echo "Batal. Tidak ada perubahan."
+              echo ""
+              exit 0
+              ;;
+
+          *)
+              echo ""
+              echo "[!] Pilihan tidak valid."
+              ;;
+
+      esac
+
+      echo ""
+      printf "Tekan Enter untuk kembali ke menu..."
+      read ENTER
+
+done
