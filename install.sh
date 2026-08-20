@@ -133,6 +133,24 @@ service_running() {
 }
 
 # ======================================
+# ROUTER REBOOT PERMISSION
+# ======================================
+
+fix_router_reboot_permission() {
+
+    mkdir -p /etc/router-reboot
+    chmod 700 /etc/router-reboot 2>/dev/null
+
+    if [ -f /usr/bin/router-reboot ]; then
+        chmod 755 /usr/bin/router-reboot 2>/dev/null
+    fi
+
+    if [ -f /etc/router-reboot/router_reboot ]; then
+        chmod 600 /etc/router-reboot/router_reboot 2>/dev/null
+    fi
+}
+
+# ======================================
 # CHECK UPDATE
 # ======================================
 
@@ -282,6 +300,7 @@ do_install() {
 
     chmod +x /usr/bin/bot 2>/dev/null
     chmod +x /etc/init.d/bot 2>/dev/null
+    fix_router_reboot_permission
 
     # ==================================
     # SERVICE
@@ -405,7 +424,8 @@ do_update() {
 
     chmod +x /usr/bin/bot 2>/dev/null
     chmod +x /etc/init.d/bot 2>/dev/null
-
+    fix_router_reboot_permission
+    
     # ==================================
     # RESTART
     # ==================================
