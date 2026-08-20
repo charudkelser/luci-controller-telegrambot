@@ -1,0 +1,10 @@
+#!/bin/sh
+
+KEY="/etc/router-reboot/router_reboot"
+ROUTER="root@192.168.1.2"
+
+exec /usr/bin/dbclient \
+    -y \
+    -i "$KEY" \
+    "$ROUTER" \
+    "reboot"
