@@ -64,10 +64,12 @@ send_more_menu() {
                 {"text": "🚀 Speed Test", "callback_data": "btn_speedtest"},
                 {"text": "🧹 Clear Cache RAM", "callback_data": "btn_clearcache"}
             ],
-            [
-                {"text": "💾 Backup Config", "callback_data": "btn_backup"},
-                {"text": "🔄 Reboot", "callback_data": "btn_reboot"}
-            ],
+[
+    {"text": "🌐 Reboot Router", "callback_data": "btn_router_reboot"}
+],
+[
+    {"text": "🔄 Reboot", "callback_data": "btn_reboot"}
+],
             [
                 {"text": "🚫 Ban Mac", "callback_data": "btn_ban_info"},
                 {"text": "✅ Unban Mac", "callback_data": "btn_unban_info"}
@@ -271,6 +273,24 @@ Tidak ada perangkat lain terdeteksi."
             echo 3 > /proc/sys/vm/drop_caches
             send_msg "🧹 *Cache Memori Berhasil Dibersihkan!*"
             ;;
+        btn_router_reboot)
+    send_msg "🌐 *Mengirim perintah reboot ke router 192.168.1.2...*"
+
+    /usr/bin/router-reboot >/tmp/router-reboot.log 2>&1
+
+    RET=$?
+
+    if [ "$RET" -eq 0 ]; then
+        send_msg "✅ *Perintah reboot berhasil dikirim.*
+🌐 Router *192.168.1.2* sedang reboot..."
+    else
+        ERROR=$(cat /tmp/router-reboot.log 2>/dev/null)
+        send_msg "❌ *Gagal reboot router!*
+*Exit:* $RET
+*Error:*
+\`$ERROR\`"
+    fi
+    ;;
         btn_reboot|/reboot)
             send_msg "🔄 *Me-restart STB...*"
             sleep 1
@@ -290,12 +310,6 @@ Tidak ada perangkat lain terdeteksi."
             curl -s -X POST "https://api.telegram.org/bot$TOKEN/editMessageText" \
                 -d "chat_id=$CHAT_ID" -d "message_id=$msg_id" --data-urlencode "text=🤖 *Dashboard Control Router OpenWrt*" \
                 -d "parse_mode=Markdown" --data-urlencode "reply_markup=$KEYBOARD" > /dev/null
-            ;;
-        btn_backup)
-            send_msg "💾 *Membuat backup konfigurasi...*"
-            sysupgrade -b /tmp/backup.tar.gz
-            curl -s -F chat_id=$CHAT_ID -F document=@/tmp/backup.tar.gz "https://api.telegram.org/bot$TOKEN/sendDocument" > /dev/null
-            rm /tmp/backup.tar.gz
             ;;
         btn_ban_info)
             LEASES="/tmp/dhcp.leases"
