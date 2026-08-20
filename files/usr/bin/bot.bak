@@ -1,0 +1,506 @@
+#!/bin/sh
+
+TOKEN=$(uci -q get bot.main.bot_token)
+CHAT_ID=$(uci -q get bot.main.chat_id)
+
+KNOWN_DEVICES="/etc/known_macs.txt"
+ACTIVE_DEVICES="/etc/active_macs.txt"
+
+[ ! -f "$KNOWN_DEVICES" ] && touch "$KNOWN_DEVICES"
+[ ! -f "$ACTIVE_DEVICES" ] && touch "$ACTIVE_DEVICES"
+
+OFFSET=0
+
+send_msg() {
+    local text="$1"
+    [ -z "$TOKEN" ] || [ -z "$CHAT_ID" ] && return
+
+    RESPONSE=$(curl -s --connect-timeout 2 --max-time 4 -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
+        --data-urlencode "chat_id=$CHAT_ID" \
+        --data-urlencode "text=$text" \
+        --data-urlencode "parse_mode=Markdown")
+
+    SENT_MSG_ID=$(echo "$RESPONSE" | jq -r '.result.message_id // empty' 2>/dev/null)
+
+    if [ -n "$SENT_MSG_ID" ]; then
+        (
+            sleep 5
+            curl -s -X POST "https://api.telegram.org/bot$TOKEN/deleteMessage" \
+                -d "chat_id=$CHAT_ID" \
+                -d "message_id=$SENT_MSG_ID" > /dev/null
+        ) &
+    fi
+}
+
+send_menu() {
+    local KEYBOARD='{
+        "inline_keyboard": [
+            [
+                {"text": "📊 Status", "callback_data": "btn_status"},
+                {"text": "🌐 IP WAN", "callback_data": "btn_ip"}
+            ],
+            [
+                {"text": "📱 Perangkat", "callback_data": "btn_devices"},
+                {"text": "🌡️ Suhu CPU", "callback_data": "btn_temp"}
+            ],
+            [
+                {"text": "⚙️ Lainnya", "callback_data": "btn_more"}
+            ]
+        ]
+    }'
+
+    curl -s --connect-timeout 2 --max-time 4 -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
+        -d "chat_id=$CHAT_ID" \
+        --data-urlencode "text=🤖 *Dashboard Control Router OpenWrt*" \
+        -d "parse_mode=Markdown" \
+        --data-urlencode "reply_markup=$KEYBOARD" > /dev/null
+}
+
+send_more_menu() {
+    local msg_id="$1"
+    local KEYBOARD='{
+        "inline_keyboard": [
+            [
+                {"text": "🚀 Speed Test", "callback_data": "btn_speedtest"},
+                {"text": "🧹 Clear Cache RAM", "callback_data": "btn_clearcache"}
+            ],
+[
+    {"text": "🌐 Reboot Router", "callback_data": "btn_router_reboot"}
+],
+[
+    {"text": "🔄 Reboot", "callback_data": "btn_reboot"}
+],
+            [
+                {"text": "🚫 Ban Mac", "callback_data": "btn_ban_info"},
+                {"text": "✅ Unban Mac", "callback_data": "btn_unban_info"}
+            ],
+            [
+                {"text": "📋 Daftar Ban", "callback_data": "btn_listban"}
+            ],
+            [
+                {"text": "🔙 Kembali", "callback_data": "btn_back"}
+            ]
+        ]
+    }'
+
+    curl -s --connect-timeout 2 --max-time 4 -X POST "https://api.telegram.org/bot$TOKEN/editMessageText" \
+        -d "chat_id=$CHAT_ID" \
+        -d "message_id=$msg_id" \
+        --data-urlencode "text=⚙️ *Menu Kontrol Lainnya*" \
+        -d "parse_mode=Markdown" \
+        --data-urlencode "reply_markup=$KEYBOARD" > /dev/null
+}
+
+answer_callback() {
+    local cb_id="$1"
+    curl -s --connect-timeout 2 --max-time 3 -X POST "https://api.telegram.org/bot$TOKEN/answerCallbackQuery" \
+        -d "callback_query_id=$cb_id" > /dev/null
+}
+
+check_new_devices() {
+    [ ! -f /tmp/dhcp.leases ] && return
+    awk '{print $2, $3, $4}' /tmp/dhcp.leases | while read -r mac ip name; do
+        if [ -n "$mac" ] && ! grep -qi "$mac" "$KNOWN_DEVICES"; then
+            echo "$mac" >> "$KNOWN_DEVICES"
+            [ "$name" = "*" ] || [ -z "$name" ] && name="Unknown-Device"
+            send_msg "⚠️ *Perangkat Baru Terhubung!*
+*Nama:* $name
+*IP:* $ip
+*MAC:* \`$mac\`"
+        fi
+    done
+}
+
+check_connect_disconnect() {
+    ip neigh show | grep -E 'REACHABLE|STALE|DELAY' | grep -v '192.168.1.2' | grep -v '192.168.8.1' | awk '{print $1, $5}' > /tmp/cur_online.txt
+    
+    if [ ! -s "$ACTIVE_DEVICES" ]; then
+        awk '{print $2}' /tmp/cur_online.txt | sort -u > "$ACTIVE_DEVICES"
+        return
+    fi
+
+    while read -r ip mac; do
+        [ -z "$mac" ] && continue
+        if ! grep -qi "$mac" "$ACTIVE_DEVICES"; then
+            NAME=$(awk -v target_mac="$mac" 'tolower($2) == tolower(target_mac) {print $4}' /tmp/dhcp.leases 2>/dev/null)
+            [ -z "$NAME" ] || [ "$NAME" = "*" ] && NAME="Unknown Device"
+            
+            send_msg "🟢 *Device Connected!*
+*Nama:* $NAME
+*IP:* \`$ip\`
+*MAC:* \`$mac\`"
+            echo "$mac" >> "$ACTIVE_DEVICES"
+        fi
+    done < /tmp/cur_online.txt
+
+    cat "$ACTIVE_DEVICES" | while read -r old_mac; do
+        [ -z "$old_mac" ] && continue
+        
+        if ! awk '{print $2}' /tmp/cur_online.txt | grep -qi "$old_mac"; then
+            OLD_IP=$(awk -v target_mac="$old_mac" 'tolower($2) == tolower(target_mac) {print $3}' /tmp/dhcp.leases 2>/dev/null)
+            
+            STILL_ALIVE=0
+            if [ -n "$OLD_IP" ]; then
+                for i in 1 2 3; do
+                    if ping -c 1 -W 1 "$OLD_IP" >/dev/null 2>&1; then
+                        STILL_ALIVE=1
+                        break
+                    fi
+                done
+            fi
+
+            if [ "$STILL_ALIVE" -eq 1 ]; then
+                echo "$OLD_IP $old_mac" >> /tmp/cur_online.txt
+            else
+                OLD_NAME=$(awk -v target_mac="$old_mac" 'tolower($2) == tolower(target_mac) {print $4}' /tmp/dhcp.leases 2>/dev/null)
+                [ -z "$OLD_NAME" ] || [ "$OLD_NAME" = "*" ] && OLD_NAME="Unknown Device"
+                [ -z "$OLD_IP" ] && OLD_IP="Offline"
+
+                send_msg "🔴 *Device Disconnected!*
+*Nama:* $OLD_NAME
+*IP:* \`$OLD_IP\`
+*MAC:* \`$old_mac\`"
+            fi
+        fi
+    done
+    
+    if [ -f /tmp/cur_online.txt ]; then
+        awk '{print $2}' /tmp/cur_online.txt | sort -u > /tmp/active_macs_new.txt 2>/dev/null
+        [ -f /tmp/active_macs_new.txt ] && mv /tmp/active_macs_new.txt "$ACTIVE_DEVICES"
+    fi
+}
+
+process_action() {
+    local action="$1"
+    local msg_id="$2"
+
+    case "$action" in
+                btn_status|/status)
+            # Format Uptime Ringkas (Contoh: 0h 8m 33s)
+            UPTIME_SEC=$(awk '{print int($1)}' /proc/uptime)
+            UP_H=$((UPTIME_SEC / 3600))
+            UP_M=$(((UPTIME_SEC % 3600) / 60))
+            UP_S=$((UPTIME_SEC % 60))
+            
+            if [ $UP_H -gt 0 ]; then
+                UPTIME_FORMAT="${UP_H}h ${UP_M}m ${UP_S}s"
+            else
+                UPTIME_FORMAT="${UP_M}m ${UP_S}s"
+            fi
+
+            # Kalkulasi Memory Sesuai Rumus LuCI (MemTotal - MemFree - Buffers - Cached)
+            MEM_TOTAL=$(awk '/MemTotal:/ {print $2}' /proc/meminfo)
+            MEM_FREE=$(awk '/MemFree:/ {print $2}' /proc/meminfo)
+            MEM_BUFFERS=$(awk '/Buffers:/ {print $2}' /proc/meminfo)
+            MEM_CACHED=$(awk '/^Cached:/ {print $2}' /proc/meminfo)
+            
+            MEM_USED_KB=$((MEM_TOTAL - MEM_FREE - MEM_BUFFERS - MEM_CACHED))
+            MEM_TOTAL_MB=$((MEM_TOTAL / 1024))
+            MEM_USED_MB=$((MEM_USED_KB / 1024))
+            MEM_PERCENT=$(( (MEM_USED_KB * 100) / MEM_TOTAL ))
+
+            send_msg "📊 *Status Router:*
+*Uptime:* $UPTIME_FORMAT
+*Memory:* RAM: ${MEM_USED_MB}MB / ${MEM_TOTAL_MB}MB (${MEM_PERCENT}%)"
+            ;;
+
+        btn_ip|/ip)
+            IP_WAN=$(curl -s --connect-timeout 2 --max-time 3 https://api.ipify.org)
+            send_msg "🌐 *IP Publik WAN:*
+\`$IP_WAN\`"
+            ;;
+        btn_devices|/devices)
+            ping -c 1 -W 1 192.168.1.255 > /dev/null 2>&1
+            LIST=$(ip neigh show | grep -E 'REACHABLE|STALE|DELAY' | grep -v '192.168.1.2' | grep -v '192.168.8.1' | awk '{print $1, $5}')
+            
+            if [ -n "$LIST" ]; then
+                echo "$LIST" | while read -r ip mac; do
+                    NAME=$(awk -v target_ip="$ip" '$3 == target_ip {print $4}' /tmp/dhcp.leases 2>/dev/null)
+                    [ -z "$NAME" ] || [ "$NAME" = "*" ] && NAME="Unknown"
+                    send_msg "📱 *Perangkat Terhubung:*
+• *Nama:* $NAME
+  *IP:* \`$ip\`
+  *MAC:* \`$mac\`"
+                done
+            else
+                send_msg "📱 *Perangkat Terhubung:*
+Tidak ada perangkat lain terdeteksi."
+            fi
+            ;;
+        btn_speedtest|/speedtest)
+            send_msg "⏳ *Sedang menguji kecepatan Download & Upload...*"
+            
+            # Tes Download (10MB)
+            SPEED_DL_BPS=$(curl -s -w "%{speed_download}" -o /dev/null "https://speed.cloudflare.com/__down?bytes=10000000")
+            
+            # Tes Upload (2MB data dummy)
+            SPEED_UL_BPS=$(head -c 2000000 /dev/zero | curl -s -w "%{speed_upload}" -o /dev/null -X POST --data-binary @- "https://speed.cloudflare.com/__up")
+            
+            if [ -n "$SPEED_DL_BPS" ] && [ "$SPEED_DL_BPS" != "0" ]; then
+                # Konversi Bytes/sec ke Mbps
+                SPEED_DL_MBPS=$(awk -v speed="$SPEED_DL_BPS" 'BEGIN {printf "%.2f", (speed * 8) / 1000000}')
+                SPEED_UL_MBPS=$(awk -v speed="$SPEED_UL_BPS" 'BEGIN {printf "%.2f", (speed * 8) / 1000000}')
+                
+                send_msg "🚀 *Hasil Speedtest Router (Cloudflare):*
+• *Download:* \`${SPEED_DL_MBPS} Mbps\` ⬇️
+• *Upload:* \`${SPEED_UL_MBPS} Mbps\` ⬆️
+• *Status:* 🟢 Selesai diuji"
+            else
+                send_msg "❌ *Gagal melakukan tes kecepatan.* Pastikan router terhubung ke internet."
+            fi
+            ;;
+                btn_temp|/temp)
+            TEMP=""
+            if [ -f /sys/class/thermal/thermal_zone0/temp ]; then
+                TEMP=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null)
+            elif [ -f /sys/devices/virtual/thermal/thermal_zone0/temp ]; then
+                TEMP=$(cat /sys/devices/virtual/thermal/thermal_zone0/temp 2>/dev/null)
+            fi
+
+            if [ -n "$TEMP" ]; then
+                if [ "$TEMP" -gt 1000 ]; then
+                    TEMP_CELSIUS=$((TEMP / 1000))
+                else
+                    TEMP_CELSIUS=$TEMP
+                fi
+                send_msg "🌡️ *Suhu CPU:* ${TEMP_CELSIUS}°C"
+            else
+                send_msg "⚠️ Sensor suhu tidak terbaca."
+            fi
+            ;;
+        btn_clearcache|/clearcache)
+            sync
+            echo 3 > /proc/sys/vm/drop_caches
+            send_msg "🧹 *Cache Memori Berhasil Dibersihkan!*"
+            ;;
+        btn_router_reboot)
+    send_msg "🌐 *Mengirim perintah reboot ke router 192.168.1.2...*"
+
+    /usr/bin/router-reboot >/tmp/router-reboot.log 2>&1
+
+    RET=$?
+
+    if [ "$RET" -eq 0 ]; then
+        send_msg "✅ *Perintah reboot berhasil dikirim.*
+🌐 Router *192.168.1.2* sedang reboot..."
+    else
+        ERROR=$(cat /tmp/router-reboot.log 2>/dev/null)
+        send_msg "❌ *Gagal reboot router!*
+*Exit:* $RET
+*Error:*
+\`$ERROR\`"
+    fi
+    ;;
+        btn_reboot|/reboot)
+            send_msg "🔄 *Me-restart STB...*"
+            sleep 1
+            reboot
+            ;;
+        btn_more)
+            send_more_menu "$msg_id"
+            ;;
+        btn_back)
+            KEYBOARD='{
+                "inline_keyboard": [
+                    [{"text": "📊 Status", "callback_data": "btn_status"}, {"text": "🌐 IP WAN", "callback_data": "btn_ip"}],
+                    [{"text": "📱 Perangkat", "callback_data": "btn_devices"}, {"text": "🌡️ Suhu CPU", "callback_data": "btn_temp"}],
+                    [{"text": "⚙️ Lainnya", "callback_data": "btn_more"}]
+                ]
+            }'
+            curl -s -X POST "https://api.telegram.org/bot$TOKEN/editMessageText" \
+                -d "chat_id=$CHAT_ID" -d "message_id=$msg_id" --data-urlencode "text=🤖 *Dashboard Control Router OpenWrt*" \
+                -d "parse_mode=Markdown" --data-urlencode "reply_markup=$KEYBOARD" > /dev/null
+            ;;
+        btn_ban_info)
+            LEASES="/tmp/dhcp.leases"
+            if [ -f "$LEASES" ] && [ -s "$LEASES" ]; then
+                # Ambil daftar MAC yang SUDAH di-ban agar tidak muncul ganda
+                BANNED_MACS=$(uci show firewall | grep "\.src_mac=" | awk -F'=' '{print $2}' | tr -d "'" | tr 'a-z' 'A-Z')
+                
+                BUTTONS=""
+                while read -r ts mac ip name clientid; do
+                    [ -z "$mac" ] && continue
+                    
+                    MAC_UPPER=$(echo "$mac" | tr 'a-z' 'A-Z')
+                    # Skip jika MAC ini sudah di-ban
+                    echo "$BANNED_MACS" | grep -q "$MAC_UPPER" && continue
+
+                    [ "$name" = "*" ] || [ -z "$name" ] && name="Unknown"
+                    # Bersihkan karakter khusus agar JSON Telegram tidak error
+                    SAFE_NAME=$(echo "$name" | sed 's/[^a-zA-Z0-9._-]/_/g')
+                    
+                    BUTTONS="$BUTTONS[{\"text\": \"🚫 $SAFE_NAME ($ip)\", \"callback_data\": \"act_ban_$MAC_UPPER\"}],"
+                done < "$LEASES"
+
+                if [ -n "$BUTTONS" ]; then
+                    BUTTONS=$(echo "$BUTTONS" | sed 's/,$//')
+                    KEYBOARD="{\"inline_keyboard\": [$BUTTONS, [{\"text\": \"🔙 Kembali\", \"callback_data\": \"btn_more\"}]]}"
+                    
+                    curl -s -X POST "https://api.telegram.org/bot$TOKEN/editMessageText" \
+                        -d "chat_id=$CHAT_ID" -d "message_id=$msg_id" \
+                        --data-urlencode "text=🚫 *Pilih perangkat yang ingin di-Ban:*" \
+                        -d "parse_mode=Markdown" \
+                        --data-urlencode "reply_markup=$KEYBOARD" > /dev/null
+                else
+                    send_msg "⚠️ Tidak ada perangkat aktif (atau semua perangkat sudah di-ban)."
+                fi
+            else
+                send_msg "⚠️ File DHCP leases kosong/tidak ditemukan."
+            fi
+            ;;
+        btn_unban_info)
+            BANNED_MACS=$(uci show firewall | grep "\.src_mac=" | awk -F'=' '{print $2}' | tr -d "'" | tr 'a-z' 'A-Z' | sort -u)
+            if [ -n "$BANNED_MACS" ]; then
+                BUTTONS=""
+                for mac in $BANNED_MACS; do
+                    NAME=$(awk -v target_mac="$mac" 'tolower($2) == tolower(target_mac) {print $4}' /tmp/dhcp.leases 2>/dev/null)
+                    [ -z "$NAME" ] || [ "$NAME" = "*" ] && NAME="Device"
+                    SAFE_NAME=$(echo "$NAME" | sed 's/[^a-zA-Z0-9._-]/_/g')
+                    
+                    BUTTONS="$BUTTONS[{\"text\": \"✅ Unban $SAFE_NAME ($mac)\", \"callback_data\": \"act_unban_$mac\"}],"
+                done
+
+                BUTTONS=$(echo "$BUTTONS" | sed 's/,$//')
+                KEYBOARD="{\"inline_keyboard\": [$BUTTONS, [{\"text\": \"🔙 Kembali\", \"callback_data\": \"btn_more\"}]]}"
+
+                curl -s -X POST "https://api.telegram.org/bot$TOKEN/editMessageText" \
+                    -d "chat_id=$CHAT_ID" -d "message_id=$msg_id" \
+                    --data-urlencode "text=✅ *Pilih perangkat yang ingin di-Unban:*" \
+                    -d "parse_mode=Markdown" \
+                    --data-urlencode "reply_markup=$KEYBOARD" > /dev/null
+            else
+                send_msg "✅ Tidak ada perangkat yang sedang diblokir."
+            fi
+            ;;
+        btn_listban|/listban)
+            BAN_LIST=$(uci show firewall | grep "\.src_mac=" | awk -F'=' '{print $2}' | tr -d "'" | sort -u | awk '{print "• `" $1 "`"}')
+            if [ -n "$BAN_LIST" ]; then
+                send_msg "📋 *Daftar MAC Terblokir (Permanen):*
+$BAN_LIST"
+            else
+                send_msg "✅ Tidak ada MAC yang diblokir."
+            fi
+            ;;
+    esac
+}
+
+if [ -z "$TOKEN" ] || [ -z "$CHAT_ID" ]; then
+    echo "Error: TOKEN atau CHAT_ID belum dikonfigurasi di /etc/config/bot"
+    exit 1
+fi
+
+# Inisialisasi offset awal untuk buang antrean pesan lama
+INIT_UPDATES=$(curl -s --connect-timeout 2 --max-time 4 "https://api.telegram.org/bot$TOKEN/getUpdates?offset=-1")
+LAST_ID=$(echo "$INIT_UPDATES" | jq -r '.result[-1].update_id // empty' 2>/dev/null)
+[ -n "$LAST_ID" ] && OFFSET=$((LAST_ID + 1))
+
+LAST_PROCESSED_ID=0
+
+# Pesan otomatis saat bot baru hidup (setelah reboot/start service)
+sleep 10
+send_msg "✅ *Reboot sukses!*
+*OpenWRT telah selesai melakukan reboot.*"
+
+while true; do
+
+    check_new_devices
+    check_connect_disconnect
+
+    UPDATES=$(curl -s --connect-timeout 2 --max-time 5 "https://api.telegram.org/bot$TOKEN/getUpdates?offset=$OFFSET&limit=1&timeout=2")
+    UPDATE_ID=$(echo "$UPDATES" | jq -r '.result[0].update_id // empty' 2>/dev/null)
+    
+    if [ -n "$UPDATE_ID" ] && [ "$UPDATE_ID" -ne "$LAST_PROCESSED_ID" ]; then
+        LAST_PROCESSED_ID=$UPDATE_ID
+        OFFSET=$((UPDATE_ID + 1))
+        
+        CB_ID=$(echo "$UPDATES" | jq -r '.result[0].callback_query.id // empty' 2>/dev/null)
+        CB_DATA=$(echo "$UPDATES" | jq -r '.result[0].callback_query.data // empty' 2>/dev/null)
+        MSG_ID=$(echo "$UPDATES" | jq -r '.result[0].callback_query.message.message_id // empty' 2>/dev/null)
+        
+        if [ -n "$CB_ID" ]; then
+            answer_callback "$CB_ID"
+            
+                        if echo "$CB_DATA" | grep -q '^act_ban_'; then
+                MAC_BAN=$(echo "$CB_DATA" | sed 's/act_ban_//' | tr 'a-z' 'A-Z')
+                SECTION_NAME="ban_${MAC_BAN//:/}"
+                uci set firewall."$SECTION_NAME"=rule
+                uci set firewall."$SECTION_NAME".name="Ban_$MAC_BAN"
+                uci set firewall."$SECTION_NAME".src="lan"
+                uci set firewall."$SECTION_NAME".src_mac="$MAC_BAN"
+                uci set firewall."$SECTION_NAME".target="DROP"
+                uci commit firewall
+                /etc/init.d/firewall reload > /dev/null 2>&1
+
+                # Putus koneksi & hapus ARP table target
+                TARGET_IP=$(awk -v m="$MAC_BAN" 'tolower($2) == tolower(m) {print $3}' /tmp/dhcp.leases 2>/dev/null)
+                if [ -n "$TARGET_IP" ]; then
+                    ip neigh del "$TARGET_IP" dev br-lan 2>/dev/null
+                    conntrack -D -s "$TARGET_IP" >/dev/null 2>&1
+                fi
+
+                send_msg "🚫 *MAC Address $MAC_BAN Berhasil Diblokir & Koneksi Diputus!*"
+                
+            elif echo "$CB_DATA" | grep -q '^act_unban_'; then
+                MAC_UNBAN=$(echo "$CB_DATA" | sed 's/act_unban_//' | tr 'a-z' 'A-Z')
+                SECTION_NAME="ban_${MAC_UNBAN//:/}"
+                uci delete firewall."$SECTION_NAME" 2>/dev/null
+                uci commit firewall
+                /etc/init.d/firewall reload > /dev/null 2>&1
+                
+                send_msg "✅ *Blokir MAC $MAC_UNBAN Berhasil Dihapus!*"
+            else
+                process_action "$CB_DATA" "$MSG_ID"
+            fi
+        else
+            MSG_CHAT_ID=$(echo "$UPDATES" | jq -r '.result[0].message.chat.id // empty' 2>/dev/null)
+            TEXT=$(echo "$UPDATES" | jq -r '.result[0].message.text // empty' 2>/dev/null)
+            
+            if [ "$MSG_CHAT_ID" = "$CHAT_ID" ]; then
+                if [ "$TEXT" = "/start" ] || [ "$TEXT" = "/menu" ]; then
+                    send_menu
+                   elif echo "$TEXT" | grep -q '^/ban'; then
+                    MAC_BAN=$(echo "$TEXT" | awk '{print $2}' | tr 'a-z' 'A-Z')
+                    if [ -n "$MAC_BAN" ]; then
+                        SECTION_NAME="ban_${MAC_BAN//:/}"
+                        uci set firewall."$SECTION_NAME"=rule
+                        uci set firewall."$SECTION_NAME".name="Ban_$MAC_BAN"
+                        uci set firewall."$SECTION_NAME".src="lan"
+                        uci set firewall."$SECTION_NAME".src_mac="$MAC_BAN"
+                        uci set firewall."$SECTION_NAME".target="DROP"
+                        uci commit firewall
+                        /etc/init.d/firewall reload > /dev/null 2>&1
+
+                        # Putus koneksi & hapus ARP table target
+                        TARGET_IP=$(awk -v m="$MAC_BAN" 'tolower($2) == tolower(m) {print $3}' /tmp/dhcp.leases 2>/dev/null)
+                        if [ -n "$TARGET_IP" ]; then
+                            ip neigh del "$TARGET_IP" dev br-lan 2>/dev/null
+                            conntrack -D -s "$TARGET_IP" >/dev/null 2>&1
+                        fi
+
+                        send_msg "🚫 *MAC Address $MAC_BAN Berhasil Diblokir & Koneksi Diputus!*"
+                    else
+                        send_msg "⚠️ Gunakan format: \`/ban MAC_ADDRESS\`"
+                    fi
+
+                elif echo "$TEXT" | grep -q '^/unban'; then
+                    MAC_UNBAN=$(echo "$TEXT" | awk '{print $2}' | tr 'a-z' 'A-Z')
+                    if [ -n "$MAC_UNBAN" ]; then
+                        SECTION_NAME="ban_${MAC_UNBAN//:/}"
+                        uci delete firewall."$SECTION_NAME" 2>/dev/null
+                        uci commit firewall
+                        /etc/init.d/firewall reload > /dev/null 2>&1
+                        
+                        send_msg "✅ *Blokir MAC $MAC_UNBAN Dihapus Permanen!*"
+                    else
+                        send_msg "⚠️ Gunakan format: \`/unban MAC_ADDRESS\`"
+                    fi
+
+                else
+                    process_action "$TEXT" "$MSG_ID"
+                fi
+            fi
+        fi
+    fi
+    sleep 1
+done
+
