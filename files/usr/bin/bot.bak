@@ -276,7 +276,7 @@ Tidak ada perangkat lain terdeteksi."
         btn_router_reboot)
     send_msg "🌐 *Mengirim perintah reboot ke router 192.168.1.2...*"
 
-    /usr/bin/router-reboot >/tmp/router-reboot.log 2>&1
+    /usr/bin/router-reboot/router_reboot >/tmp/router-reboot.log 2>&1
 
     RET=$?
 
