@@ -13,8 +13,8 @@ usr/bin/bot:/usr/bin/bot
 etc/init.d/bot:/etc/init.d/bot
 usr/lib/lua/luci/controller/bot.lua:/usr/lib/lua/luci/controller/bot.lua
 usr/lib/lua/luci/model/cbi/bot.lua:/usr/lib/lua/luci/model/cbi/bot.lua
-usr/bin/router-reboot:/usr/bin/router-reboot
-etc/router-reboot/router_reboot:/etc/router-reboot/router_reboot
+usr/bin/router-reboot/router_reboot:/usr/bin/router-reboot/router_reboot
+etc/etc/router-reboot/router_reboot:/etc/router-reboot/router_reboot
 "
 
 # ======================================
@@ -143,8 +143,8 @@ fix_router_reboot_permission() {
     mkdir -p /etc/router-reboot
     chmod 700 /etc/router-reboot 2>/dev/null
 
-    if [ -f /usr/bin/router-reboot ]; then
-        chmod 755 /usr/bin/router-reboot 2>/dev/null
+    if [ -f /usr/bin/router-reboot/router_reboot ]; then
+        chmod 755 /usr/bin/router-reboot/router_reboot 2>/dev/null
     fi
 
     if [ -f /etc/router-reboot/router_reboot ]; then
@@ -325,7 +325,7 @@ do_install() {
 
     chmod +x /usr/bin/bot 2>/dev/null
     chmod +x /etc/init.d/bot 2>/dev/null
-    chmod +x /usr/bin/router-reboot 2>/dev/null
+    chmod +x /usr/bin/router-reboot/router_reboot 2>/dev/null
     fix_router_reboot_permission
 
     # ==================================
@@ -450,7 +450,7 @@ do_update() {
 
     chmod +x /usr/bin/bot 2>/dev/null
     chmod +x /etc/init.d/bot 2>/dev/null
-    chmod +x /usr/bin/router-reboot 2>/dev/null
+    chmod +x /usr/bin/router-reboot/router_reboot 2>/dev/null
     fix_router_reboot_permission
     
     # ==================================
@@ -552,7 +552,7 @@ do_uninstall() {
     echo "  /etc/init.d/bot"
     echo "  /usr/lib/lua/luci/controller/bot.lua"
     echo "  /usr/lib/lua/luci/model/cbi/bot.lua"
-    echo "  /usr/bin/router-reboot"
+    echo "  /usr/bin/router-reboot/router_reboot"
     echo "  /etc/router-reboot/router_reboot"
     echo "  /etc/config/bot"
     echo "  /etc/known_macs.txt"
@@ -601,7 +601,7 @@ do_uninstall() {
     rm -f /etc/init.d/bot
     rm -f /usr/lib/lua/luci/controller/bot.lua
     rm -f /usr/lib/lua/luci/model/cbi/bot.lua
-    rm -f /usr/bin/router-reboot
+    rm -rf /usr/bin/router-reboot
     rm -f /etc/router-reboot/router_reboot
 
     # ==================================
