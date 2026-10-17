@@ -13,19 +13,16 @@ Telegram Bot Controller untuk OpenWrt dengan integrasi LuCI Web UI. Project ini 
 - 📊 **Monitoring status router** secara *real-time*
 - 🌐 **Informasi IP publik / WAN**
 - 📱 **Monitoring perangkat LAN** yang terhubung
-- 🔔 **Notifikasi perangkat terhubung**
-- 🔴 **Notifikasi perangkat terputus**
+- 🔔 **Notifikasi perangkat terhubung & terputus**
 - 🌡️ **Informasi suhu CPU**
 - 🚀 **Speed Test** jaringan
 - 🧹 **Clear Cache RAM**
 - 💾 **Backup konfigurasi OpenWrt**
-- 🔄 **Reboot router** jarak jauh
-- 🚫 **Ban MAC Address** (Blokir perangkat)
-- ✅ **Unban MAC Address** (Buka blokir perangkat)
+- 🔄 **Reboot router jarak jauh** (Menggunakan OpenSSH Client & PEM Key)
+- 🚫 **Ban / Unban MAC Address** (Blokir / Buka blokir perangkat)
 - 📋 **Daftar MAC Address yang diblokir**
 - ⚙️ **Service menggunakan `procd`**
-- 🔄 **Installer dari GitHub**
-- 🔄 **Updater dari GitHub**
+- 🔄 **Installer & Updater dari GitHub**
 - 🛡️ **Konfigurasi Telegram Bot tetap dipertahankan saat update**
 
 ---
@@ -65,10 +62,10 @@ luci-controller-telegrambot/
 ## 🚀 Instalasi
 
 ### 1. Install Paket Dependensi
-Jalankan perintah berikut pada Terminal / SSH router OpenWrt untuk memasang paket prasyarat:
+Jalankan perintah berikut pada Terminal / SSH router OpenWrt untuk memasang paket prasyarat (termasuk `openssh-client` untuk fitur remote reboot):
 
 ```bash
-opkg update && opkg install curl ca-certificates jq conntrack-tools
+opkg update && opkg install curl ca-certificates jq conntrack openssh-client
 ```
 
 ### 2. Install Telegram Bot Controller
@@ -77,6 +74,17 @@ Jalankan perintah berikut untuk menginstal langsung dari GitHub menggunakan inst
 ```bash
 wget -qO- https://raw.githubusercontent.com/charudkelser/luci-controller-telegrambot/main/install.sh | sh
 ```
+
+---
+
+## 🔑 Catatan Penting: SSH Key untuk Reboot Router
+
+Jika kamu menggunakan fitur **Reboot Router Target**:
+1. Gunakan Private Key berformat **PEM (OpenSSH)** (`-----BEGIN OPENSSH PRIVATE KEY-----`).
+2. Pastikan izin file *key* di-set ke **`600`** agar tidak diblokir oleh OpenSSH (mencegah error *UNPROTECTED PRIVATE KEY FILE / Exit 255*):
+   ```bash
+   chmod 600 /etc/router-reboot/router_reboot
+   ```
 
 ---
 
