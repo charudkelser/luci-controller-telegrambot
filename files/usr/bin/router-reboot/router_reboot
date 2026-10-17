@@ -3,8 +3,11 @@
 KEY="/etc/router-reboot/router_reboot"
 ROUTER="root@192.168.1.2"
 
-exec /usr/bin/dbclient \
-    -y \
+exec /usr/bin/ssh \
+    -o StrictHostKeyChecking=no \
+    -o KexAlgorithms=+diffie-hellman-group1-sha1,diffie-hellman-group14-sha1 \
+    -o HostKeyAlgorithms=+ssh-rsa \
+    -o PubkeyAcceptedKeyTypes=+ssh-rsa \
     -i "$KEY" \
     "$ROUTER" \
     "reboot"
