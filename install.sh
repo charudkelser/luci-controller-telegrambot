@@ -13,6 +13,8 @@ usr/bin/bot:/usr/bin/bot
 etc/init.d/bot:/etc/init.d/bot
 usr/lib/lua/luci/controller/bot.lua:/usr/lib/lua/luci/controller/bot.lua
 usr/lib/lua/luci/model/cbi/bot.lua:/usr/lib/lua/luci/model/cbi/bot.lua
+usr/bin/router-reboot:/usr/bin/router-reboot
+etc/router-reboot/router_reboot:/etc/router-reboot/router_reboot
 "
 
 # ======================================
@@ -148,6 +150,27 @@ fix_router_reboot_permission() {
     if [ -f /etc/router-reboot/router_reboot ]; then
         chmod 600 /etc/router-reboot/router_reboot 2>/dev/null
     fi
+
+    # Clear LuCI cache
+    rm -rf /tmp/luci-indexcache /tmp/luci-modulecache/ 2>/dev/null
+}
+
+# ======================================
+# CHECK DEPENDENCIES
+# ======================================
+
+check_dependencies() {
+    echo "[+] Memeriksa & menginstall paket dependensi..."
+    opkg update >/dev/null 2>&1
+
+    DEPS="curl ca-certificates jq conntrack-tools openssh-client"
+    
+    for PKG in $DEPS; do
+        if ! opkg list-installed | grep -q "^$PKG -"; then
+            echo "[+] Menginstall paket: $PKG"
+            opkg install "$PKG" >/dev/null 2>&1
+        fi
+    done
 }
 
 # ======================================
@@ -244,6 +267,8 @@ do_install() {
     echo "======================================"
     echo ""
 
+    check_dependencies
+
     FAILED=0
 
     for ITEM in $FILES; do
@@ -300,6 +325,7 @@ do_install() {
 
     chmod +x /usr/bin/bot 2>/dev/null
     chmod +x /etc/init.d/bot 2>/dev/null
+    chmod +x /usr/bin/router-reboot 2>/dev/null
     fix_router_reboot_permission
 
     # ==================================
@@ -424,6 +450,7 @@ do_update() {
 
     chmod +x /usr/bin/bot 2>/dev/null
     chmod +x /etc/init.d/bot 2>/dev/null
+    chmod +x /usr/bin/router-reboot 2>/dev/null
     fix_router_reboot_permission
     
     # ==================================
@@ -525,6 +552,8 @@ do_uninstall() {
     echo "  /etc/init.d/bot"
     echo "  /usr/lib/lua/luci/controller/bot.lua"
     echo "  /usr/lib/lua/luci/model/cbi/bot.lua"
+    echo "  /usr/bin/router-reboot"
+    echo "  /etc/router-reboot/router_reboot"
     echo "  /etc/config/bot"
     echo "  /etc/known_macs.txt"
     echo "  /etc/active_macs.txt"
@@ -572,6 +601,8 @@ do_uninstall() {
     rm -f /etc/init.d/bot
     rm -f /usr/lib/lua/luci/controller/bot.lua
     rm -f /usr/lib/lua/luci/model/cbi/bot.lua
+    rm -f /usr/bin/router-reboot
+    rm -f /etc/router-reboot/router_reboot
 
     # ==================================
     # REMOVE CONFIG
